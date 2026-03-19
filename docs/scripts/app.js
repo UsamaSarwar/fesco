@@ -47,6 +47,321 @@ function renderKeyValueTable(title, obj) {
   return table;
 }
 
+function parseBillHtml(htmlString, ref) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(htmlString, "text/html");
+
+  const cleanText = (str) => {
+    if (!str) return "";
+    return String(str)
+      .replace(/\s+/g, " ")
+      .replace(/[\u200B-\u200D\uFEFF]/g, "")
+      .replace(/[`‑–—]+/g, " ")
+      .replace(/-{2,}/g, " ")
+      .trim();
+  };
+
+  const extractGrid = (headers) => {
+    const rows = Array.from(doc.querySelectorAll("tr"));
+    for (let i = 0; i < rows.length - 1; i++) {
+      const text = cleanText(rows[i].textContent).toUpperCase();
+      const found = headers.filter((h) => text.includes(h)).length;
+      if (found >= headers.length - 1 && found > 0) {
+        return Array.from(rows[i + 1].querySelectorAll("td")).map((td) => cleanText(td.textContent));
+      }
+    }
+    return [];
+  };
+
+  const extractCharge = (label) => {
+    const rs = Array.from(doc.querySelectorAll("tr"));
+    for (const row of rs) {
+      const text = cleanText(row.textContent);
+      if (text.toUpperCase().includes(label.toUpperCase())) {
+        const tds = Array.from(row.querySelectorAll("td")).map((td) => cleanText(td.textContent));
+        for (let i = 0; i < tds.length; i++) {
+          if (tds[i].toUpperCase().includes(label.toUpperCase())) {
+            return tds[i + 1] || "";
+          }
+        }
+      }
+    }
+    return "";
+  };
+
+  const data = {
+    reference_number: ref,
+    consumer_details: {
+      consumer_id: "",
+      tariff: "",
+      load: "",
+      old_ac_number: "",
+      reference_full: "",
+      lock_age: "",
+      no_of_acs: "",
+      un_bill_age: "",
+      name: "",
+      father_name: "",
+      address: "",
+      cnic: "",
+    },
+    connection_details: {
+      connection_date: "",
+      connected_load: "",
+      curr_mdi: "",
+      ed_at: "",
+      bill_month: "",
+      reading_date: "",
+      issue_date: "",
+      due_date: "",
+      division: "",
+      sub_division: "",
+      feeder_name: "",
+    },
+    billing_details: {
+      meter_no: "",
+      previous_reading: "",
+      present_reading: "",
+      mf: "",
+      units_consumed: "",
+      status: "",
+    },
+    charges_breakdown: {
+      fesco_charges: {
+        units_consumed: "",
+        cost_of_electricity: "",
+        meter_rent_fix: "",
+        service_rent: "",
+        fuel_adj: "",
+        fc_surcharge: "",
+        total: "",
+      },
+      govt_charges: {
+        electricity_duty: "",
+        tv_fee: "",
+        gst: "",
+        income_tax: "",
+        extra_tax: "",
+        further_tax: "",
+        retailer_stax: "",
+        total: "",
+      },
+      taxes_on_fpa: {
+        gst_on_fpa: "",
+        ed_on_fpa: "",
+        further_tax_on_fpa: "",
+        stax_on_fpa: "",
+        it_on_fpa: "",
+        et_on_fpa: "",
+        total: "",
+      },
+      total_charges: {
+        arrear_age: "",
+        current_bill: "",
+        bill_adj: "",
+        installment: "",
+        subsidies: "",
+        total_fpa: "",
+      },
+    },
+    billing_history: [],
+    total_payable: {
+      within_due_date: "",
+      lp_surcharge: "",
+      after_due_date: "",
+      after_due_date_ranges: [],
+    },
+    additional_info: {
+      bill_no: "",
+      deferred_amount: "",
+      outstanding_inst_amount: "",
+      progress_gst_paid_fy: "",
+      progress_it_paid_fy: "",
+    },
+    _html: htmlString,
+  };
+
+  const connP = extractGrid(["CONNECTION DATE", "CONNECTED LOAD", "BILL MONTH"]);
+  const consP = extractGrid(["CONSUMER ID", "TARIFF", "LOAD"]);
+  const refP = extractGrid(["REFERENCE NO", "NO OF ACS"]);
+  const meterP = extractGrid(["METER NO", "PREVIOUS", "PRESENT"]);
+
+  Object.assign(data.consumer_details, {
+    consumer_id: consP[0] || "",
+    tariff: consP[1] || "",
+    load: consP[2] || "",
+    old_ac_number: consP[3] || "",
+    reference_full: refP[0] || "",
+    lock_age: refP[1] || "",
+    no_of_acs: refP[2] || "",
+    un_bill_age: refP[3] || "",
+  });
+
+  Object.assign(data.connection_details, {
+    connection_date: connP[0] || "",
+    connected_load: connP[1] || "",
+    curr_mdi: connP[2] || "",
+    ed_at: connP[3] || "",
+    bill_month: connP[4] || "",
+    reading_date: connP[5] || "",
+    issue_date: connP[6] || "",
+    due_date: connP[7] || (connP[6] || ""),
+    division: extractCharge("DIVISION"),
+    sub_division: extractCharge("SUB DIVISION"),
+    feeder_name: extractCharge("FEEDER NAME"),
+  });
+
+  Object.assign(data.billing_details, {
+    meter_no: meterP[0] || "",
+    previous_reading: meterP[1] || "",
+    present_reading: meterP[2] || "",
+    mf: meterP[3] || "",
+    units_consumed: meterP[4] || "",
+    status: meterP[5] || "",
+  });
+
+  const nameBlock = doc.querySelector("h4:contains('NAME')") || doc.querySelector("h4:contains('NAME & ADDRESS')");
+  if (nameBlock) {
+    const spanText = Array.from(doc.querySelectorAll("span")).map((s) => cleanText(s.textContent)).filter(Boolean);
+    if (spanText.length) {
+      data.consumer_details.name = spanText[0];
+      data.consumer_details.father_name = spanText[1] || "";
+      data.consumer_details.address = spanText.slice(2).join(", ");
+    }
+  }
+
+  data.consumer_details.cnic = extractCharge("CNIC") || "";
+
+  // Extract charges from HTML grid sections
+  const chargesSection = htmlString; // fallback to raw
+  data.charges_breakdown.fesco_charges.units_consumed = extractCharge("UNITS CONSUMED") || "";
+  data.charges_breakdown.fesco_charges.cost_of_electricity = extractCharge("COST OF ELECTRICITY") || "";
+  data.charges_breakdown.fesco_charges.meter_rent_fix = extractCharge("METER RENT") || "";
+  data.charges_breakdown.fesco_charges.fuel_adj = extractCharge("FUEL PRICE ADJUSTMENT") || "";
+  data.charges_breakdown.govt_charges.gst = extractCharge("GST") || "";
+
+  // billing history
+  const historyTable = Array.from(doc.querySelectorAll("table")).find((t) => t.textContent.includes("MONTH") && t.textContent.includes("UNITS"));
+  if (historyTable) {
+    const rows = Array.from(historyTable.querySelectorAll("tr"));
+    rows.slice(1).forEach((tr) => {
+      const cols = Array.from(tr.querySelectorAll("td")).map((c) => cleanText(c.textContent));
+      if (cols.length >= 4) {
+        const month = cols[0];
+        if (/^[A-Za-z]{3}\d{2}$/.test(month)) {
+          data.billing_history.push({ month, units: cols[1], bill: cols[2], payment: cols[3] });
+        }
+      }
+    });
+  }
+
+  data.total_payable.within_due_date = extractCharge("PAYABLE WITHIN DUE DATE") || "";
+  data.total_payable.after_due_date = extractCharge("PAYABLE AFTER DUE DATE") || "";
+  data.total_payable.lp_surcharge = extractCharge("L.P.SURCHARGE") || "";
+
+  return data;
+}
+
+function renderJson(data) {
+  const summary = document.getElementById("summary");
+  const charges = document.getElementById("charges");
+  const history = document.getElementById("history");
+  const raw = document.getElementById("raw");
+  const htmlFrame = document.getElementById("htmlFrame");
+
+  summary.innerHTML = "";
+  charges.innerHTML = "";
+  history.innerHTML = "";
+  raw.textContent = JSON.stringify(data, null, 2);
+
+  renderDashboard(data);
+
+  summary.appendChild(renderKeyValueTable("Consumer", data.consumer_details || {}));
+  summary.appendChild(renderKeyValueTable("Connection", data.connection_details || {}));
+  summary.appendChild(renderKeyValueTable("Meter", data.billing_details || {}));
+  summary.appendChild(renderKeyValueTable("Total Payable", data.total_payable || {}));
+
+  if (data.charges_breakdown) {
+    charges.appendChild(renderCharges(data.charges_breakdown));
+  }
+
+  if (Array.isArray(data.billing_history) && data.billing_history.length) {
+    history.appendChild(renderHistory(data.billing_history));
+  } else {
+    history.appendChild(el("p", { text: "No billing history found." }));
+  }
+
+  if (htmlFrame) {
+    htmlFrame.srcdoc = data._html || "<p>No HTML available</p>";
+  }
+}
+
+function fetchBill(ref) {
+  const viewer = document.getElementById("viewer");
+  const raw = document.getElementById("raw");
+  const summary = document.getElementById("summary");
+  const charges = document.getElementById("charges");
+  const history = document.getElementById("history");
+  const htmlFrame = document.getElementById("htmlFrame");
+
+  viewer.style.display = "none";
+  raw.textContent = "";
+  summary.innerHTML = "";
+  charges.innerHTML = "";
+  history.innerHTML = "";
+  if (htmlFrame) htmlFrame.srcdoc = "";
+
+  const baseRef = encodeURIComponent(ref);
+  const candidates = [
+    `/api/bill?ref=${baseRef}`,
+    `api/bill?ref=${baseRef}`,
+    `./api/bill?ref=${baseRef}`,
+    `./data/fesco_${baseRef}.json`,
+    `data/fesco_${baseRef}.json`,
+    `../data/fesco_${baseRef}.json`,
+    `/data/fesco_${baseRef}.json`,
+  ];
+
+  return tryFetchUrls(candidates)
+    .then((result) => {
+      document.getElementById("viewer").style.display = "block";
+      const data = result.data || result;
+      data._html = result.html || "";
+      renderJson(data);
+    })
+    .catch((err) => {
+      alert("Failed to load bill: " + err.message);
+    });
+}
+
+window.addEventListener("DOMContentLoaded", () => {
+  const refInput = document.getElementById("refInput");
+  const fetchBtn = document.getElementById("fetchBtn");
+
+  const setLoading = (isLoading) => {
+    if (isLoading) {
+      fetchBtn.classList.add("morph");
+      fetchBtn.disabled = true;
+      fetchBtn.textContent = "Loading…";
+    } else {
+      fetchBtn.classList.remove("morph");
+      fetchBtn.disabled = !refInput.value.trim();
+      fetchBtn.textContent = "Fetch";
+    }
+  };
+
+  refInput.addEventListener("input", () => {
+    fetchBtn.disabled = !refInput.value.trim();
+  });
+
+  fetchBtn.addEventListener("click", () => {
+    const ref = refInput.value.trim();
+    if (!ref) return;
+    setLoading(true);
+    fetchBill(ref).finally(() => setLoading(false));
+  });
+});
+
 function renderCharges(breakdown) {
   const container = el("div", { class: "grid" });
   Object.entries(breakdown).forEach(([section, values]) => {
@@ -172,6 +487,20 @@ function renderJson(data) {
   }
 }
 
+function tryFetchUrls(urls) {
+  let lastErr;
+  return urls.reduce((chain, url) => {
+    return chain.catch(() => fetch(url).then((res) => {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    }));
+  }, Promise.reject())
+  .catch((err) => {
+    lastErr = err;
+    return Promise.reject(lastErr);
+  });
+}
+
 function fetchBill(ref) {
   const viewer = document.getElementById("viewer");
   const raw = document.getElementById("raw");
@@ -187,35 +516,26 @@ function fetchBill(ref) {
   history.innerHTML = "";
   if (htmlFrame) htmlFrame.srcdoc = "";
 
-  const apiUrl = `/api/bill?ref=${encodeURIComponent(ref)}`;
-  const fallbackJson = `./data/fesco_${encodeURIComponent(ref)}.json`;
+  const baseRef = encodeURIComponent(ref);
+  const candidates = [
+    `/api/bill?ref=${baseRef}`,
+    `api/bill?ref=${baseRef}`,
+    `./api/bill?ref=${baseRef}`,
+    `./data/fesco_${baseRef}.json`,
+    `data/fesco_${baseRef}.json`,
+    `../data/fesco_${baseRef}.json`,
+    `/data/fesco_${baseRef}.json`,
+  ];
 
-  // First attempt: live server endpoint (local server, not GitHub Pages)
-  return fetch(apiUrl)
-    .then((res) => {
-      if (!res.ok) throw new Error(`Server returned ${res.status}`);
-      return res.json();
-    })
+  return tryFetchUrls(candidates)
     .then((result) => {
       document.getElementById("viewer").style.display = "block";
       const data = result.data || result;
       data._html = result.html || "";
       renderJson(data);
     })
-    .catch(() => {
-      // Fallback: load a pre-generated JSON file (works on GitHub Pages)
-      return fetch(fallbackJson)
-        .then((res) => {
-          if (!res.ok) throw new Error(`Failed to load ${fallbackJson} (HTTP ${res.status})`);
-          return res.json();
-        })
-        .then((data) => {
-          document.getElementById("viewer").style.display = "block";
-          renderJson(data);
-        })
-        .catch((err) => {
-          alert("Failed to load bill: " + err.message);
-        });
+    .catch((err) => {
+      alert("Failed to load bill: " + err.message);
     });
 }
 
