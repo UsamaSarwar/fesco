@@ -220,17 +220,22 @@ function parseBillHtml(htmlString, ref) {
     status: meterP[5] || "",
   });
 
-  const nameBlock = doc.querySelector("h4:contains('NAME')") || doc.querySelector("h4:contains('NAME & ADDRESS')");
-  if (nameBlock) {
-    const spanText = Array.from(doc.querySelectorAll("span")).map((s) => cleanText(s.textContent)).filter(Boolean);
-    if (spanText.length) {
-      data.consumer_details.name = spanText[0];
-      data.consumer_details.father_name = spanText[1] || "";
-      data.consumer_details.address = spanText.slice(2).join(", ");
+  const nameSection = /NAME\s*(?:&|&amp;)\s*ADDRESS[\s\S]*?(<span>[\s\S]*?<\/p>)/i.exec(htmlString);
+  if (nameSection) {
+    const spans = [...nameSection[1].matchAll(/<span[^>]*>([\s\S]*?)<\/span>/gi)].map((m) => cleanText(m[1])).filter(Boolean);
+    if (spans.length) {
+      data.consumer_details.name = spans[0] || "";
+      data.consumer_details.father_name = spans[1] || "";
+      data.consumer_details.address = spans.slice(2).join(", ");
     }
   }
 
-  data.consumer_details.cnic = extractCharge("CNIC") || "";
+  const cnicMatch = /<h4>\s*CNIC\s*<\/h4>\s*<\/td>\s*<td[^>]*>([\s\S]*?)<\/td>/i.exec(htmlString);
+  if (cnicMatch) {
+    data.consumer_details.cnic = cleanText(cnicMatch[1]);
+  } else {
+    data.consumer_details.cnic = extractCharge("CNIC") || "";
+  }
 
   // Extract charges from HTML grid sections
   const chargesSection = htmlString; // fallback to raw
@@ -262,105 +267,6 @@ function parseBillHtml(htmlString, ref) {
   return data;
 }
 
-function renderJson(data) {
-  const summary = document.getElementById("summary");
-  const charges = document.getElementById("charges");
-  const history = document.getElementById("history");
-  const raw = document.getElementById("raw");
-  const htmlFrame = document.getElementById("htmlFrame");
-
-  summary.innerHTML = "";
-  charges.innerHTML = "";
-  history.innerHTML = "";
-  raw.textContent = JSON.stringify(data, null, 2);
-
-  renderDashboard(data);
-
-  summary.appendChild(renderKeyValueTable("Consumer", data.consumer_details || {}));
-  summary.appendChild(renderKeyValueTable("Connection", data.connection_details || {}));
-  summary.appendChild(renderKeyValueTable("Meter", data.billing_details || {}));
-  summary.appendChild(renderKeyValueTable("Total Payable", data.total_payable || {}));
-
-  if (data.charges_breakdown) {
-    charges.appendChild(renderCharges(data.charges_breakdown));
-  }
-
-  if (Array.isArray(data.billing_history) && data.billing_history.length) {
-    history.appendChild(renderHistory(data.billing_history));
-  } else {
-    history.appendChild(el("p", { text: "No billing history found." }));
-  }
-
-  if (htmlFrame) {
-    htmlFrame.srcdoc = data._html || "<p>No HTML available</p>";
-  }
-}
-
-function fetchBill(ref) {
-  const viewer = document.getElementById("viewer");
-  const raw = document.getElementById("raw");
-  const summary = document.getElementById("summary");
-  const charges = document.getElementById("charges");
-  const history = document.getElementById("history");
-  const htmlFrame = document.getElementById("htmlFrame");
-
-  viewer.style.display = "none";
-  raw.textContent = "";
-  summary.innerHTML = "";
-  charges.innerHTML = "";
-  history.innerHTML = "";
-  if (htmlFrame) htmlFrame.srcdoc = "";
-
-  const baseRef = encodeURIComponent(ref);
-  const candidates = [
-    `/api/bill?ref=${baseRef}`,
-    `api/bill?ref=${baseRef}`,
-    `./api/bill?ref=${baseRef}`,
-    `./data/fesco_${baseRef}.json`,
-    `data/fesco_${baseRef}.json`,
-    `../data/fesco_${baseRef}.json`,
-    `/data/fesco_${baseRef}.json`,
-  ];
-
-  return tryFetchUrls(candidates)
-    .then((result) => {
-      document.getElementById("viewer").style.display = "block";
-      const data = result.data || result;
-      data._html = result.html || "";
-      renderJson(data);
-    })
-    .catch((err) => {
-      alert("Failed to load bill: " + err.message);
-    });
-}
-
-window.addEventListener("DOMContentLoaded", () => {
-  const refInput = document.getElementById("refInput");
-  const fetchBtn = document.getElementById("fetchBtn");
-
-  const setLoading = (isLoading) => {
-    if (isLoading) {
-      fetchBtn.classList.add("morph");
-      fetchBtn.disabled = true;
-      fetchBtn.textContent = "Loading…";
-    } else {
-      fetchBtn.classList.remove("morph");
-      fetchBtn.disabled = !refInput.value.trim();
-      fetchBtn.textContent = "Fetch";
-    }
-  };
-
-  refInput.addEventListener("input", () => {
-    fetchBtn.disabled = !refInput.value.trim();
-  });
-
-  fetchBtn.addEventListener("click", () => {
-    const ref = refInput.value.trim();
-    if (!ref) return;
-    setLoading(true);
-    fetchBill(ref).finally(() => setLoading(false));
-  });
-});
 
 function renderCharges(breakdown) {
   const container = el("div", { class: "grid" });
@@ -393,32 +299,6 @@ function renderHistory(history) {
   return table;
 }
 
-function renderJson(data) {
-  const summary = document.getElementById("summary");
-  const charges = document.getElementById("charges");
-  const history = document.getElementById("history");
-  const raw = document.getElementById("raw");
-
-  summary.innerHTML = "";
-  charges.innerHTML = "";
-  history.innerHTML = "";
-  raw.textContent = JSON.stringify(data, null, 2);
-
-  summary.appendChild(renderKeyValueTable("Consumer", data.consumer_details || {}));
-  summary.appendChild(renderKeyValueTable("Connection", data.connection_details || {}));
-  summary.appendChild(renderKeyValueTable("Meter", data.billing_details || {}));
-  summary.appendChild(renderKeyValueTable("Total Payable", data.total_payable || {}));
-
-  if (data.charges_breakdown) {
-    charges.appendChild(renderCharges(data.charges_breakdown));
-  }
-
-  if (Array.isArray(data.billing_history) && data.billing_history.length) {
-    history.appendChild(renderHistory(data.billing_history));
-  } else {
-    history.appendChild(el("p", { text: "No billing history found." }));
-  }
-}
 
 function renderDashboard(data) {
   const dashboard = document.getElementById("dashboard");
@@ -487,21 +367,11 @@ function renderJson(data) {
   }
 }
 
-function tryFetchUrls(urls) {
-  let lastErr;
-  return urls.reduce((chain, url) => {
-    return chain.catch(() => fetch(url).then((res) => {
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res.json();
-    }));
-  }, Promise.reject())
-  .catch((err) => {
-    lastErr = err;
-    return Promise.reject(lastErr);
-  });
+function isValidRef(ref) {
+  return /^\d{14}$/.test(ref);
 }
 
-function fetchBill(ref) {
+async function fetchBill(ref) {
   const viewer = document.getElementById("viewer");
   const raw = document.getElementById("raw");
   const summary = document.getElementById("summary");
@@ -516,32 +386,34 @@ function fetchBill(ref) {
   history.innerHTML = "";
   if (htmlFrame) htmlFrame.srcdoc = "";
 
-  const baseRef = encodeURIComponent(ref);
-  const candidates = [
-    `/api/bill?ref=${baseRef}`,
-    `api/bill?ref=${baseRef}`,
-    `./api/bill?ref=${baseRef}`,
-    `./data/fesco_${baseRef}.json`,
-    `data/fesco_${baseRef}.json`,
-    `../data/fesco_${baseRef}.json`,
-    `/data/fesco_${baseRef}.json`,
-  ];
+  try {
+    const billUrl = `https://bill.pitc.com.pk/fescobill/general?refno=${encodeURIComponent(ref)}`;
+    const response = await fetch(billUrl, { method: "GET" });
 
-  return tryFetchUrls(candidates)
-    .then((result) => {
-      document.getElementById("viewer").style.display = "block";
-      const data = result.data || result;
-      data._html = result.html || "";
-      renderJson(data);
-    })
-    .catch((err) => {
-      alert("Failed to load bill: " + err.message);
-    });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const html = await response.text();
+    const data = parseBillHtml(html, ref);
+    data._html = html;
+
+    document.getElementById("viewer").style.display = "block";
+    renderJson(data);
+  } catch (err) {
+    const message = err?.message || "Unknown error";
+    console.error("Failed to load bill", { message, err });
+    alert(`Failed to load bill: ${message}`);
+  }
 }
 
 window.addEventListener("DOMContentLoaded", () => {
   const refInput = document.getElementById("refInput");
   const fetchBtn = document.getElementById("fetchBtn");
+
+  const syncButtonState = () => {
+    fetchBtn.disabled = !isValidRef(refInput.value.trim());
+  };
 
   const setLoading = (isLoading) => {
     if (isLoading) {
@@ -550,19 +422,24 @@ window.addEventListener("DOMContentLoaded", () => {
       fetchBtn.textContent = "Loading…";
     } else {
       fetchBtn.classList.remove("morph");
-      fetchBtn.disabled = !refInput.value.trim();
+      syncButtonState();
       fetchBtn.textContent = "Fetch";
     }
   };
 
   refInput.addEventListener("input", () => {
-    fetchBtn.disabled = !refInput.value.trim();
+    syncButtonState();
   });
 
   fetchBtn.addEventListener("click", () => {
     const ref = refInput.value.trim();
-    if (!ref) return;
+    if (!isValidRef(ref)) {
+      alert("Enter a valid 14-digit reference number.");
+      return;
+    }
     setLoading(true);
     fetchBill(ref).finally(() => setLoading(false));
   });
+
+  syncButtonState();
 });

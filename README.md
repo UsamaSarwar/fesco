@@ -37,6 +37,24 @@ python3 fesco.py 08131842083435
 python3 fesco.py 08131842083435 --json
 ```
 
+## GitHub Pages (Static Web App)
+
+The web UI inside `docs/` is now fully static (`HTML + CSS + JavaScript`) and does not require `node docs/server.js`.
+
+### Deploy
+
+1. Push this repository to GitHub.
+2. In repository settings, open **Pages**.
+3. Set source to **Deploy from a branch**.
+4. Select your branch (for example, `main`) and folder **/docs**.
+5. Save and open the generated Pages URL.
+
+### Use
+
+- Open the Pages site.
+- Enter a valid 14-digit reference number.
+- Click **Fetch** to load bill details in-browser.
+
 ## License
 
 This project is open-source and available under the [MIT License](LICENSE).
