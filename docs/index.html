@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>FESCO Bill Viewer</title>
+  <title>FESCO Bill Checker</title>
   <link rel="stylesheet" href="styles/style.css" />
 </head>
 <body>
@@ -22,6 +22,8 @@
     </div>
 
     <div id="viewer" class="card" style="display: none;">
+      <div id="dashboard"></div>
+
       <h2>Bill Summary</h2>
       <div id="summary"></div>
 
@@ -33,6 +35,8 @@
 
       <h2>Raw JSON</h2>
       <pre id="raw"></pre>
+<h2>Bill HTML</h2>
+<iframe id="htmlFrame" style="width: 100%; height: 600px; border: 1px solid #ccc;"></iframe>
     </div>
   </main>
 

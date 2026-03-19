@@ -387,11 +387,13 @@ async function fetchBill(ref) {
   if (htmlFrame) htmlFrame.srcdoc = "";
 
   try {
-    const billUrl = `https://bill.pitc.com.pk/fescobill/general?refno=${encodeURIComponent(ref)}`;
-    const response = await fetch(billUrl, { method: "GET" });
+    // Use CORS proxy to bypass restrictions
+    const fescoUrl = `https://bill.pitc.com.pk/fescobill/general?refno=${encodeURIComponent(ref)}`;
+    const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(fescoUrl)}`;
+    const response = await fetch(proxyUrl, { method: "GET" });
 
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
 
     const html = await response.text();

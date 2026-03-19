@@ -37,23 +37,36 @@ python3 fesco.py 08131842083435
 python3 fesco.py 08131842083435 --json
 ```
 
-## GitHub Pages (Static Web App)
+## Web Dashboard
 
-The web UI inside `docs/` is now fully static (`HTML + CSS + JavaScript`) and does not require `node docs/server.js`.
+The web UI inside `docs/` provides an interactive dashboard for fetching and viewing bills.
 
-### Deploy
+### Run Locally
 
-1. Push this repository to GitHub.
-2. In repository settings, open **Pages**.
-3. Set source to **Deploy from a branch**.
-4. Select your branch (for example, `main`) and folder **/docs**.
-5. Save and open the generated Pages URL.
+```bash
+node docs/server.js
+```
 
-### Use
+Then visit `http://localhost:3000` in your browser.
 
-- Open the Pages site.
-- Enter a valid 14-digit reference number.
-- Click **Fetch** to load bill details in-browser.
+### Deploy to Production
+
+Since the dashboard requires a backend API to fetch bills, you must deploy to a platform that supports Node.js:
+
+**Option A: Vercel (Recommended)**
+1. Install Vercel CLI: `npm install -g vercel`
+2. Run: `vercel` in the repository root
+3. Vercel will automatically configure the `docs/server.js` as an API
+
+**Option B: Heroku**
+1. Create a `Procfile` in the root: `web: node docs/server.js`
+2. Deploy: `git push heroku main`
+
+**Option C: Railway/Render**
+1. Connect your GitHub repo to Railway or Render
+2. Set start command to: `node docs/server.js`
+
+**GitHub Pages Note:** Pure GitHub Pages (static only) cannot host this app because it requires a Node.js backend for fetching bills. For a static-only deployment, consider using a serverless function service with Vercel or Netlify.
 
 ## License
 
