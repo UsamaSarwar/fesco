@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FESCO Bill Viewer</title>
+  <link rel="stylesheet" href="styles/style.css" />
+</head>
+<body>
+  <header>
+    <h1>FESCO Bill Checker</h1>
+    <p>Enter a reference number to load and explore your bill details in a modern dashboard.</p>
+  </header>
+
+  <main>
+    <div class="card">
+      <h2>Fetch Bill</h2>
+      <p class="note">Enter a 14-digit reference ID and click <strong>Fetch</strong>. If a server is running, the page will fetch live bill data; otherwise it will load a pre-generated JSON file from <code>docs/data/</code>.</p>
+      <div class="actions">
+        <input id="refInput" class="ref-input" placeholder="Reference ID" />
+        <button id="fetchBtn" class="fetch-btn" disabled>Fetch</button>
+      </div>
+    </div>
+
+    <div id="viewer" class="card" style="display: none;">
+      <h2>Bill Summary</h2>
+      <div id="summary"></div>
+
+      <h2>Charges Breakdown</h2>
+      <div id="charges"></div>
+
+      <h2>Billing History</h2>
+      <div id="history"></div>
+
+      <h2>Raw JSON</h2>
+      <pre id="raw"></pre>
+    </div>
+  </main>
+
+  <script src="./scripts/app.js"></script>
+</body>
+</html>
