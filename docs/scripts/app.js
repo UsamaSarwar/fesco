@@ -386,10 +386,11 @@ async function fetchBill(ref) {
   history.innerHTML = "";
   if (htmlFrame) htmlFrame.srcdoc = "";
 
+  let data;
+  let localApiError = null;
+
   try {
     console.log(`[fetchBill] start ref=${ref}`);
-    let data;
-    let localApiError = null;
 
     // Prefer the local docs server /api/bill endpoint when available (avoids CORS issues).
     try {
