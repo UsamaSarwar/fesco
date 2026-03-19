@@ -387,25 +387,65 @@ async function fetchBill(ref) {
   if (htmlFrame) htmlFrame.srcdoc = "";
 
   try {
-    // Use CORS proxy to bypass restrictions
-    const fescoUrl = `https://bill.pitc.com.pk/fescobill/general?refno=${encodeURIComponent(ref)}`;
-    const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(fescoUrl)}`;
-    const response = await fetch(proxyUrl, { method: "GET" });
+    console.log(`[fetchBill] start ref=${ref}`);
+    let data;
+    let localApiError = null;
 
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    // Prefer the local docs server /api/bill endpoint when available (avoids CORS issues).
+    try {
+      const apiUrl = `/api/bill?ref=${encodeURIComponent(ref)}`;
+      console.log(`[fetchBill] trying local API: ${apiUrl}`);
+      const resp = await fetch(apiUrl, { method: "GET" });
+      console.log(`[fetchBill] local API response: ${resp.status} ${resp.statusText}`);
+      if (resp.ok) {
+        const json = await resp.json();
+        console.log(`[fetchBill] local API payload keys: ${Object.keys(json || {}).join(", ")}`);
+        if (json && json.data) {
+          data = json.data;
+          if (json.html) data._html = json.html;
+        } else if (json && json.error) {
+          throw new Error(json.error);
+        }
+      } else {
+        const errPayload = await resp.text();
+        throw new Error(`Local API ${resp.status}: ${errPayload}`);
+      }
+    } catch (apiErr) {
+      localApiError = apiErr;
+      console.warn("Local /api/bill fetch failed, falling back to CORS proxy", apiErr);
     }
 
-    const html = await response.text();
-    const data = parseBillHtml(html, ref);
-    data._html = html;
+    if (!data) {
+      // Use CORS proxy to bypass restrictions when the local API is not available.
+      const fescoUrl = `https://bill.pitc.com.pk/fescobill/general?refno=${encodeURIComponent(ref)}`;
+      const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(fescoUrl)}`;
+      console.log(`[fetchBill] falling back to proxy: ${proxyUrl}`);
+      const response = await fetch(proxyUrl, { method: "GET" });
+      console.log(`[fetchBill] proxy response: ${response.status} ${response.statusText}`);
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const html = await response.text();
+      data = parseBillHtml(html, ref);
+      data._html = html;
+    }
 
     document.getElementById("viewer").style.display = "block";
     renderJson(data);
   } catch (err) {
-    const message = err?.message || "Unknown error";
-    console.error("Failed to load bill", { message, err });
-    alert(`Failed to load bill: ${message}`);
+    const message =
+      err?.message ||
+      (typeof err === "string" ? err : err ? JSON.stringify(err, null, 2) : "Unknown error");
+
+    let tip = "";
+    if (localApiError) {
+      tip = "\n\nTip: Run `node docs/server.js` and open the UI at http://localhost:3000 to avoid CORS issues.";
+    }
+
+    console.error("Failed to load bill", err);
+    alert(`Failed to load bill: ${message}${tip}`);
   }
 }
 
