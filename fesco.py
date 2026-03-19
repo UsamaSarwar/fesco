@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# python3 fesco_fetcher.py 08131842083435
 import sys
 import re
 import urllib.request
@@ -125,14 +124,42 @@ class FescoFetcher:
                 print(json.dumps({"error": str(e)}))
             return None
 
+    def _extract_grid(self, html, headers_to_find):
+        """Extracts values from grid-style tables where one row has labels and the next has values."""
+        trs = []
+        for match in re.finditer(r'<tr[^>]*>([\s\S]*?)</tr>', html, re.IGNORECASE):
+            trs.append(match.group(1))
+            
+        for i, tr_html in enumerate(trs):
+            text_in_tr = self._clean(tr_html).upper()
+            found = sum(1 for h in headers_to_find if h in text_in_tr)
+            if found >= len(headers_to_find) - 1 and found > 0:
+                if i + 1 < len(trs):
+                    val_tr = trs[i + 1]
+                    val_tds = re.findall(r'<td[^>]*?>([\s\S]*?)</td>', val_tr, re.IGNORECASE)
+                    return [self._clean(td) for td in val_tds]
+        return []
+
+    def _extract_charge(self, label, html):
+        """Extracts a value that sits in the next <td> after the label's <td> in the same <tr>."""
+        l_esc = re.escape(label)
+        for tr_match in re.finditer(r'<tr[^>]*>([\s\S]*?)</tr>', html, re.IGNORECASE):
+            tr_html = tr_match.group(1)
+            if re.search(l_esc, tr_html, re.IGNORECASE):
+                tds = re.findall(r'<td[^>]*?>([\s\S]*?)</td>', tr_html, re.IGNORECASE)
+                for i, td in enumerate(tds):
+                    if re.search(l_esc, td, re.IGNORECASE):
+                        if i + 1 < len(tds):
+                            return self._clean(tds[i + 1])
+        return ""
+
     def _parse_bill(self, html, ref_no):
         """Extracts comprehensive structured data from FESCO bill HTML using strict structural parsing."""
         data = {
-            "reference_number": ref_no.replace(" ", ""),
+            "reference_number": ref_no,
             "consumer_details": {
-                "consumer_id": "", "tariff": "", "load": "", "old_ac_number": "", 
-                "reference_full": "", "lock_age": "", "no_of_acs": "", "un_bill_age": "",
-                "name": "", "address": "", "cnic": ""
+                "consumer_id": "", "tariff": "", "load": "", "old_ac_number": "", "reference_full": "",
+                "lock_age": "", "no_of_acs": "", "un_bill_age": "", "name": "", "address": "", "cnic": ""
             },
             "connection_details": {
                 "connection_date": "", "connected_load": "", "curr_mdi": "", "ed_at": "",
@@ -155,147 +182,94 @@ class FescoFetcher:
         }
 
         # Identify Major High-Level Blocks
-        # (Splitting by content avoids getting wrong values from other sections)
-        sections = {
-            "header": re.split(r'CONSUMER\s*ID', html, maxsplit=1, flags=re.IGNORECASE)[0],
-            "consumer": re.search(r'CONSUMER\s*ID[\s\S]*?(?=METER\s*NO)', html, re.IGNORECASE),
-            "meter": re.search(r'METER\s*NO[\s\S]*?(?=FESCO\s*CHARGES)', html, re.IGNORECASE),
-            "charges": re.search(r'FESCO\s*CHARGES[\s\S]*?(?=BILLING\s*HISTORY|MONTH\s+UNITS)', html, re.IGNORECASE),
-            "history": re.search(r'MONTH\s+UNITS[\s\S]*?</table>', html, re.IGNORECASE),
-            "footer": re.search(r'BILL\s*MONTH[\s\S]*?PAYABLE\s*WITHIN\s*DUE\s*DATE[\s\S]*?</table>', html, re.IGNORECASE)
-        }
+        charges_match = re.search(r'FESCO[\s\S]*?CHARGES[\s\S]*?(?=BILLING[\s\S]*?HISTORY|MONTH\s+UNITS)', html, re.IGNORECASE)
+        ch_txt = charges_match.group(0) if charges_match else html
 
-        # Helper to get values from a labels-then-values row pair
-        def get_row_pair(labels, block_text):
-             for match in re.finditer(r'<tr[^>]*>([\s\S]*?)</tr>', block_text, re.IGNORECASE):
-                  row_content = match.group(1)
-                  if all(re.search(re.escape(l), row_content, re.IGNORECASE) for l in labels):
-                       # Found the header row, now find the NEXT row
-                       next_part = block_text[match.end():]
-                       val_match = re.search(r'<tr[^>]*>([\s\S]*?)</tr>', next_part, re.IGNORECASE)
-                       if val_match:
-                            return [self._clean(c) for c in re.findall(r'<td[^>]*?>([\s\S]*?)</td>', val_match.group(1), re.IGNORECASE)]
-             return []
+        # Grids
+        conn_p = self._extract_grid(html, ["CONNECTION DATE", "CONNECTED LOAD", "BILL MONTH"])
+        cons_p = self._extract_grid(html, ["CONSUMER ID", "TARIFF", "LOAD"])
+        ref_p = self._extract_grid(html, ["REFERENCE NO", "NO OF ACS"])
+        meter_p = self._extract_grid(html, ["METER NO", "PREVIOUS", "PRESENT"])
 
-        # 1. Header (Top)
-        head_vals = get_row_pair(["CONNECTION DATE", "DUE DATE"], sections["header"])
-        # Some bills might have fewer columns or extra spaces
-        if not head_vals:
-            # Try a subset of labels
-            head_vals = get_row_pair(["CONNECTION DATE", "BILL MONTH"], sections["header"])
-        
-        if len(head_vals) >= 7:
-             data["connection_details"].update({
-                 "connection_date": head_vals[0], 
-                 "connected_load": head_vals[1], 
-                 "ed_at": head_vals[2], 
-                 "bill_month": head_vals[3], 
-                 "reading_date": head_vals[4], 
-                 "issue_date": head_vals[5], 
-                 "due_date": head_vals[6]
-             })
+        data["consumer_details"].update({
+            "consumer_id": cons_p[0] if len(cons_p) > 0 else "",
+            "tariff": cons_p[1] if len(cons_p) > 1 else "",
+            "load": cons_p[2] if len(cons_p) > 2 else "",
+            "old_ac_number": cons_p[3] if len(cons_p) > 3 else "",
+            "reference_full": ref_p[0] if len(ref_p) > 0 else "",
+            "lock_age": ref_p[1] if len(ref_p) > 1 else "",
+            "no_of_acs": ref_p[2] if len(ref_p) > 2 else "",
+            "un_bill_age": ref_p[3] if len(ref_p) > 3 else ""
+        })
 
-        # 2. Consumer Stats
-        if sections["consumer"]:
-             c_txt = sections["consumer"].group(0)
-             cons = get_row_pair(["CONSUMER ID", "TARIFF"], c_txt)
-             if len(cons) >= 4: data["consumer_details"].update({"consumer_id": cons[0], "tariff": cons[1], "load": cons[2], "old_ac_number": cons[3]})
-             
-             refs = get_row_pair(["REFERENCE NO", "UN-BILL-AGE"], c_txt)
-             if len(refs) >= 4: data["consumer_details"].update({"reference_full": refs[0], "lock_age": refs[1], "no_of_acs": refs[2], "un_bill_age": refs[3]})
+        data["connection_details"].update({
+            "connection_date": conn_p[0] if len(conn_p) > 0 else "",
+            "connected_load": conn_p[1] if len(conn_p) > 1 else "",
+            "curr_mdi": conn_p[2] if len(conn_p) > 2 else "",
+            "ed_at": conn_p[3] if len(conn_p) > 3 else "",
+            "bill_month": conn_p[4] if len(conn_p) > 4 else "",
+            "reading_date": conn_p[5] if len(conn_p) > 5 else "",
+            "issue_date": conn_p[6] if len(conn_p) > 6 else "",
+            "due_date": conn_p[7] if len(conn_p) > 7 else (conn_p[6] if len(conn_p) > 6 else ""), # handle missing ED@ column variation
+            "division": self._extract_charge("DIVISION", html),
+            "sub_division": self._extract_charge("SUB DIVISION", html),
+            "feeder_name": self._extract_charge("FEEDER NAME", html)
+        })
 
-             data["connection_details"].update({"division": self._find_val("DIVISION", c_txt), "sub_division": self._find_val("SUB DIVISION", c_txt), "feeder_name": self._find_val("FEEDER NAME", c_txt)})
+        data["billing_details"].update({
+            "meter_no": meter_p[0] if len(meter_p) > 0 else "",
+            "previous_reading": meter_p[1] if len(meter_p) > 1 else "",
+            "present_reading": meter_p[2] if len(meter_p) > 2 else "",
+            "mf": meter_p[3] if len(meter_p) > 3 else "",
+            "units_consumed": meter_p[4] if len(meter_p) > 4 else "",
+            "status": meter_p[5] if len(meter_p) > 5 else ""
+        })
 
-        # 3. Name & Address
-        name_match = re.search(r'<span>NAME\s*&\s*ADDRESS</span>([\s\S]*?)</td>', html, re.IGNORECASE)
-        if name_match:
-             lines = [self._clean(s) for s in re.findall(r'<span>([\s\S]*?)</span>', name_match.group(1), re.IGNORECASE) if self._clean(s)]
-             if lines:
-                  data["consumer_details"]["name"] = lines[0]
-                  data["consumer_details"]["address"] = ", ".join(lines[1:])
+        # Name & Address (Refined for <span> structure)
+        name_p = re.search(r'NAME\s*(?:&|&amp;)\s*ADDRESS[\s\S]*?(<span>[\s\S]*?</p>)', html, re.IGNORECASE)
+        if name_p:
+             spans = re.findall(r'<span>([\s\S]*?)</span>', name_p.group(1), re.IGNORECASE)
+             cleaned_spans = [self._clean(s) for s in spans if self._clean(s)]
+             if cleaned_spans:
+                  data["consumer_details"]["name"] = cleaned_spans[0]
+                  data["consumer_details"]["address"] = ", ".join(cleaned_spans[1:])
 
-        # 4. Meter Stats
-        if sections["meter"]:
-             m_txt = sections["meter"].group(0)
-             m_vals = get_row_pair(["METER NO", "STATUS"], m_txt)
-             if len(m_vals) >= 5: data["billing_details"].update({"meter_no": m_vals[0], "previous_reading": m_vals[1], "present_reading": m_vals[2], "mf": m_vals[3], "units_consumed": m_vals[4]})
+        # CNIC
+        cnic_m = re.search(r'<h4>CNIC\s*</h4>\s*</td>\s*<td[^>]*?>([\s\S]*?)</td>', html, re.IGNORECASE)
+        if cnic_m:
+             data["consumer_details"]["cnic"] = self._clean(cnic_m.group(1))
+        elif re.search(r'CNIC:\s*(\d+)', html):
+             data["consumer_details"]["cnic"] = re.search(r'CNIC:\s*(\d+)', html).group(1)
 
-        # 5. Charges Breakdown
-        if sections["charges"]:
-             c_txt = sections["charges"].group(0)
-             # Sub-divide charges
-             sub_sects = {
-                 "fesco": re.search(r'FESCO\s*CHARGES[\s\S]*?(?=GOVERNMENT\s*CHARGES)', c_txt, re.IGNORECASE),
-                 "govt": re.search(r'GOVERNMENT\s*CHARGES[\s\S]*?(?=TOTAL\s*TAXES\s*ON\s*FPA)', c_txt, re.IGNORECASE),
-                 "fpa": re.search(r'TOTAL\s*TAXES\s*ON\s*FPA[\s\S]*?(?=ARREAR/AGE)', c_txt, re.IGNORECASE),
-                 "total": re.search(r'ARREAR/AGE[\s\S]*', c_txt, re.IGNORECASE)
-             }
-             
-             for key, label_list in {
-                 "fesco_charges": [("cost_of_electricity", "COST OF ELECTRICITY"), ("meter_rent_fix", "METER RENT"), ("service_rent", "SERVICE RENT"), ("fuel_adj", "FUEL PRICE ADJUSTMENT"), ("fc_surcharge", "F.C SURCHARGE"), ("total", "TOTAL")],
-                 "govt_charges": [("electricity_duty", "ELECTRICITY DUTY"), ("tv_fee", "TV FEE"), ("gst", "GST"), ("income_tax", "INCOME TAX"), ("extra_tax", "EXTRA TAX"), ("further_tax", "FURTHER TAX"), ("retailer_stax", "RETAILER STAX"), ("total", "TOTAL")],
-                 "taxes_on_fpa": [("gst_on_fpa", "GST ON FPA"), ("ed_on_fpa", "ED ON FPA"), ("further_tax_on_fpa", "FURTHER TAX ON FPA"), ("stax_on_fpa", "S.TAX ON FPA"), ("it_on_fpa", "IT ON FPA"), ("et_on_fpa", "ET ON FPA"), ("total", "TOTAL TAXES ON FPA")],
-                 "total_charges": [("arrear_age", "ARREAR/AGE"), ("current_bill", "CURRENT BILL"), ("bill_adj", "BILL ADJUSTMENT"), ("installment", "INSTALLEMENT"), ("subsidies", "SUBSIDIES"), ("total_fpa", "TOTAL FPA")]
-             }.items():
-                 sub_match = sub_sects[key.split("_")[0]]
-                 if sub_match:
-                      for f_key, label in label_list:
-                           data["charges_breakdown"][key][f_key] = self._find_val(label, sub_match.group(0))
+        # Charges
+        for key, labels in {
+            "fesco_charges": [("cost_of_electricity", "COST OF ELECTRICITY"), ("meter_rent_fix", "METER RENT"), ("service_rent", "SERVICE RENT"), ("fuel_adj", "FUEL PRICE ADJUSTMENT"), ("fc_surcharge", "F.C SURCHARGE"), ("total", "TOTAL")],
+            "govt_charges": [("electricity_duty", "ELECTRICITY DUTY"), ("tv_fee", "TV FEE"), ("gst", "GST"), ("income_tax", "INCOME TAX"), ("extra_tax", "EXTRA TAX"), ("further_tax", "FURTHER TAX"), ("retailer_stax", "RETAILER STAX"), ("total", "TOTAL")],
+            "taxes_on_fpa": [("gst_on_fpa", "GST ON FPA"), ("ed_on_fpa", "ED ON FPA"), ("further_tax_on_fpa", "FURTHER TAX ON FPA"), ("stax_on_fpa", "S.TAX ON FPA"), ("it_on_fpa", "IT ON FPA"), ("et_on_fpa", "ET ON FPA"), ("total", "TOTAL TAXES ON FPA")],
+            "total_charges": [("arrear_age", "ARREAR/AGE"), ("current_bill", "CURRENT BILL"), ("bill_adj", "BILL ADJUSTMENT"), ("installment", "INSTALLEMENT"), ("subsidies", "SUBSIDIES"), ("total_fpa", "TOTAL FPA")]
+        }.items():
+            for f_key, label in labels:
+                 # Extract from the charges block to avoid unrelated tables (like FESCO GST No.)
+                 data["charges_breakdown"][key][f_key] = self._extract_charge(label, ch_txt)
 
-        # 6. History
-        if sections["history"]:
-             for row in re.findall(r'<tr[^>]*>([\s\S]*?)</tr>', sections["history"].group(0), re.IGNORECASE):
+        # History
+        history_match = re.search(r'MONTH\s+UNITS[\s\S]*?</table>', html, re.IGNORECASE)
+        if history_match:
+             for row in re.findall(r'<tr[^>]*>([\s\S]*?)</tr>', history_match.group(0), re.IGNORECASE):
                   c = re.findall(r'<td[^>]*?>([\s\S]*?)</td>', row, re.IGNORECASE)
                   if len(c) >= 4:
                        month = self._clean(c[0])
                        if re.match(r'^[A-Z][a-z]{2}\s*\d{2}$', month, re.IGNORECASE):
                             data["billing_history"].append({"month": month, "units": self._clean(c[1]).split()[-1] if self._clean(c[1]) else "0", "bill": self._clean(c[2]), "payment": self._clean(c[3])})
 
-        # 7. Footer Totals
-        if sections["footer"]:
-             f_txt = sections["footer"].group(0)
-             data["total_payable"]["within_due_date"] = self._find_val("PAYABLE WITHIN DUE DATE", f_txt)
-             data["total_payable"]["lp_surcharge"] = self._find_val("L.P.SURCHARGE", f_txt)
-             
-             after_cell = re.search(r'PAYABLE\s*AFTER\s*DUE\s*DATE[\s\S]*?<td[^>]*?class="[^"]*content[^"]*"[^>]*>([\s\S]*?)</td>', f_txt, re.IGNORECASE)
-             if after_cell:
-                  v_txt = after_cell.group(1)
-                  ranges = []
-                  for r_match in re.finditer(r'<strong>\s*(Till|After)\s*([\-\w\d\s]+)\s*</strong>\s*<br\s*/>\s*([\d\.\, ]+)', v_txt, re.IGNORECASE):
-                       ranges.append({"label": self._clean(r_match.group(1)), "date": self._clean(r_match.group(2)), "amount": self._clean(r_match.group(3))})
-                  data["total_payable"]["after_due_date_ranges"] = ranges
-                  data["total_payable"]["after_due_date"] = self._clean(v_txt.split("<br")[0]) if not ranges else ""
-
-        # 8. Extra Info
-        cnic = re.search(r'CNIC\s*</td>\s*<td[^>]*?>\s*([\d-]*)', html, re.IGNORECASE)
-        if cnic: data["consumer_details"]["cnic"] = cnic.group(1).strip()
-        
-        bill_no = re.search(r'BILL\s*NO\s*:\s*(\d+)', html, re.IGNORECASE)
-        if bill_no: data["additional_info"]["bill_no"] = bill_no.group(1)
-
-        for k, v in {"deferred_amount": "DEFERRED AMOUNT", "outstanding_inst_amount": "OUTSTANDING INST. AMOUNT", "progress_gst_paid_fy": "PROG. GST PAID F-Y", "progress_it_paid_fy": "PROG. IT PAID F-Y"}.items():
-             data["additional_info"][k] = self._find_val(v, html)
+        # Summary
+        data["total_payable"].update({
+            "within_due_date": self._extract_charge("PAYABLE WITHIN DUE DATE", html),
+            "after_due_date": self._extract_charge("PAYABLE AFTER DUE DATE", html),
+            "lp_surcharge": self._extract_charge("L.P.SURCHARGE", html)
+        })
 
         return data
-
-    def _find_val(self, label, block):
-        """Finds value for a label within a scoped block of HTML."""
-        l_esc = re.escape(label)
-        # Search for label in h4, b, or td, then find next content cell or just next td
-        # Ensure we don't cross too many cells to find it
-        patterns = [
-            rf'{l_esc}[\s\S]*?<td[^>]*?class="[^"]*content[^"]*"[^>]*>([\s\S]*?)</td>',
-            rf'{l_esc}[\s\S]*?<td[^>]*?>([\s\S]*?)</td>'
-        ]
-        for pat in patterns:
-             match = re.search(pat, block, re.IGNORECASE)
-             if match:
-                  # Check if we accidentally skipped another label
-                  overlap = block[match.start():match.end()]
-                  # If the found segment contains other <h4> or <b> labels besides current, it might be a mismatch
-                  # (But for charges columns this is okay. For unique fields, this helps.)
-                  return self._clean(match.group(1))
-        return ""
 
 
 
@@ -321,14 +295,6 @@ class FescoFetcher:
         # Make remaining relative paths absolute
         html = html.replace('href="/', f'href="{domain}/')
         html = html.replace('src="/', f'src="{domain}/')
-        
-        # Remove "bill is loading" overlays, scripts, and CSS
-        html = re.sub(r'<div id="loading-bar">[\s\S]*?</div>', '', html, flags=re.IGNORECASE)
-        html = re.sub(r'<div id="loading-text">[\s\S]*?</div>', '', html, flags=re.IGNORECASE)
-        html = re.sub(r'#loading-bar\s*\{[\s\S]*?\}', '', html, flags=re.IGNORECASE)
-        html = re.sub(r'#loading-text\s*\{[\s\S]*?\}', '', html, flags=re.IGNORECASE)
-        html = re.sub(r'function showLoadingBar\(\) \{[\s\S]*?\}', '', html, flags=re.IGNORECASE)
-        html = re.sub(r'window\.onload\s*=\s*showLoadingBar;?', '', html, flags=re.IGNORECASE)
         
         return html
 
