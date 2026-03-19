@@ -112,13 +112,9 @@ class FescoFetcher:
                     json.dump(data, f, indent=2)
                 logger.info(f"[+] Bill details saved to {json_filename}")
 
-                # Attempt PDF generation
-                pdf_filename = os.path.join("output", f"fesco_{reference_number}.pdf")
-                self._try_save_pdf(bill_html, pdf_filename)
-
-                logger.info(f"[i] Consumer: {data.get('consumer_name')}")
-                logger.info(f"[i] Amount: {data.get('payable_within_due_date')}")
-                logger.info(f"[i] Due Date: {data.get('due_date')}")
+                logger.info(f"[i] Consumer: {data['consumer_details'].get('name')}")
+                logger.info(f"[i] Amount: {data['total_payable'].get('within_due_date')}")
+                logger.info(f"[i] Due Date: {data['connection_details'].get('due_date')}")
 
             return data
 
@@ -161,7 +157,7 @@ class FescoFetcher:
         # Identify Major High-Level Blocks
         # (Splitting by content avoids getting wrong values from other sections)
         sections = {
-            "header": re.split(r'CONSUMER\s*ID', html, 1, re.IGNORECASE)[0],
+            "header": re.split(r'CONSUMER\s*ID', html, maxsplit=1, flags=re.IGNORECASE)[0],
             "consumer": re.search(r'CONSUMER\s*ID[\s\S]*?(?=METER\s*NO)', html, re.IGNORECASE),
             "meter": re.search(r'METER\s*NO[\s\S]*?(?=FESCO\s*CHARGES)', html, re.IGNORECASE),
             "charges": re.search(r'FESCO\s*CHARGES[\s\S]*?(?=BILLING\s*HISTORY|MONTH\s+UNITS)', html, re.IGNORECASE),
@@ -171,19 +167,33 @@ class FescoFetcher:
 
         # Helper to get values from a labels-then-values row pair
         def get_row_pair(labels, block_text):
-             for row in re.findall(r'<tr[^>]*>([\s\S]*?)</tr>', block_text, re.IGNORECASE):
-                  if all(re.search(re.escape(l), row, re.IGNORECASE) for l in labels):
-                       # Found the header row, now find the NEXT row with 'content' class
-                       next_part = block_text.split(row)[1]
-                       val_row = re.search(r'<tr[^>]*>([\s\S]*?)</tr>', next_part, re.IGNORECASE)
-                       if val_row:
-                            return [self._clean(c) for c in re.findall(r'<td[^>]*?>([\s\S]*?)</td>', val_row.group(1), re.IGNORECASE)]
+             for match in re.finditer(r'<tr[^>]*>([\s\S]*?)</tr>', block_text, re.IGNORECASE):
+                  row_content = match.group(1)
+                  if all(re.search(re.escape(l), row_content, re.IGNORECASE) for l in labels):
+                       # Found the header row, now find the NEXT row
+                       next_part = block_text[match.end():]
+                       val_match = re.search(r'<tr[^>]*>([\s\S]*?)</tr>', next_part, re.IGNORECASE)
+                       if val_match:
+                            return [self._clean(c) for c in re.findall(r'<td[^>]*?>([\s\S]*?)</td>', val_match.group(1), re.IGNORECASE)]
              return []
 
         # 1. Header (Top)
         head_vals = get_row_pair(["CONNECTION DATE", "DUE DATE"], sections["header"])
+        # Some bills might have fewer columns or extra spaces
+        if not head_vals:
+            # Try a subset of labels
+            head_vals = get_row_pair(["CONNECTION DATE", "BILL MONTH"], sections["header"])
+        
         if len(head_vals) >= 7:
-             data["connection_details"].update({"connection_date": head_vals[0], "connected_load": head_vals[1], "ed_at": head_vals[2], "bill_month": head_vals[3], "reading_date": head_vals[4], "issue_date": head_vals[5], "due_date": head_vals[6]})
+             data["connection_details"].update({
+                 "connection_date": head_vals[0], 
+                 "connected_load": head_vals[1], 
+                 "ed_at": head_vals[2], 
+                 "bill_month": head_vals[3], 
+                 "reading_date": head_vals[4], 
+                 "issue_date": head_vals[5], 
+                 "due_date": head_vals[6]
+             })
 
         # 2. Consumer Stats
         if sections["consumer"]:
@@ -290,30 +300,6 @@ class FescoFetcher:
 
 
 
-    def _try_save_pdf(self, html_content, filename):
-        """Attempts to save the HTML content as a PDF using various libraries."""
-        try:
-            # Try xhtml2pdf first as it's pure python
-            from xhtml2pdf import pisa
-            with open(filename, "w+b") as result_file:
-                # Need to handle potential encoding issues in HTML
-                pisa_status = pisa.CreatePDF(html_content, dest=result_file)
-                if not pisa_status.err:
-                    logger.info(f"[+] Bill PDF saved to {filename}")
-                    return True
-        except ImportError:
-            try:
-                # Try pdfkit if xhtml2pdf is not available
-                import pdfkit
-                pdfkit.from_string(html_content, filename)
-                logger.info(f"[+] Bill PDF saved to {filename}")
-                return True
-            except (ImportError, Exception):
-                pass
-        
-        logger.warning("[!] PDF generation skipped. Install xhtml2pdf ('pip install xhtml2pdf') for PDF export.")
-        return False
-
     def _make_html_portable(self, html):
         """Converts relative URLs to absolute ones and inlines major CSS files."""
         domain = "https://bill.pitc.com.pk"
@@ -335,6 +321,14 @@ class FescoFetcher:
         # Make remaining relative paths absolute
         html = html.replace('href="/', f'href="{domain}/')
         html = html.replace('src="/', f'src="{domain}/')
+        
+        # Remove "bill is loading" overlays, scripts, and CSS
+        html = re.sub(r'<div id="loading-bar">[\s\S]*?</div>', '', html, flags=re.IGNORECASE)
+        html = re.sub(r'<div id="loading-text">[\s\S]*?</div>', '', html, flags=re.IGNORECASE)
+        html = re.sub(r'#loading-bar\s*\{[\s\S]*?\}', '', html, flags=re.IGNORECASE)
+        html = re.sub(r'#loading-text\s*\{[\s\S]*?\}', '', html, flags=re.IGNORECASE)
+        html = re.sub(r'function showLoadingBar\(\) \{[\s\S]*?\}', '', html, flags=re.IGNORECASE)
+        html = re.sub(r'window\.onload\s*=\s*showLoadingBar;?', '', html, flags=re.IGNORECASE)
         
         return html
 

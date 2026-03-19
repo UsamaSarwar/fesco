@@ -5,7 +5,7 @@ A lightweight Python tool to fetch and parse electricity bills from Faisalabad E
 ## Features
 
 - **Fetch Bill**: Retrieve official billing data using a 14-digit reference number.
-- **Multiple Formats**: Save bills as HTML, JSON, or PDF (optional).
+- **Multiple Formats**: Save bills as HTML or JSON.
 - **Portable HTML**: Inlines CSS and resolves absolute resource paths for offline viewing.
 - **Data Parsing**: Structured extraction of consumer details, billing history, and charges breakdown.
 
