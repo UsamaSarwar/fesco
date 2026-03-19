@@ -1,2 +1,22 @@
-/__pycache__/
+# Output
+output/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
 .venv/
+env/
+venv/
+ENV/
+
+# OS
+.DS_Store
+
+# Temporary files
+fesco_*.html
+fesco_*.json
+fesco_*.pdf
+bill_*.html
+bill_*.json
+bill_*.pdf

@@ -29,8 +29,9 @@ pip install xhtml2pdf
 ```bash
 python3 fesco.py 08131842083435
 ```
+*Results will be saved in the `output/` folder.*
 
-### Output as JSON
+### Output as JSON (Stdout)
 
 ```bash
 python3 fesco.py 08131842083435 --json

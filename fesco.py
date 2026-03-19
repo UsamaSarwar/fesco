@@ -8,6 +8,7 @@ import http.cookiejar
 import logging
 import json
 import argparse
+import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(message)s')
@@ -96,20 +97,23 @@ class FescoFetcher:
             if output_json:
                 print(json.dumps(data, indent=2))
             else:
+                # Ensure output directory exists
+                os.makedirs("output", exist_ok=True)
+
                 # Save HTML
-                html_filename = f"fesco_{reference_number}.html"
+                html_filename = os.path.join("output", f"fesco_{reference_number}.html")
                 with open(html_filename, "w", encoding="utf-8") as f:
                     f.write(bill_html)
                 logger.info(f"[+] Bill HTML saved to {html_filename}")
 
                 # Save JSON
-                json_filename = f"fesco_{reference_number}.json"
+                json_filename = os.path.join("output", f"fesco_{reference_number}.json")
                 with open(json_filename, "w", encoding="utf-8") as f:
                     json.dump(data, f, indent=2)
                 logger.info(f"[+] Bill details saved to {json_filename}")
 
                 # Attempt PDF generation
-                pdf_filename = f"fesco_{reference_number}.pdf"
+                pdf_filename = os.path.join("output", f"fesco_{reference_number}.pdf")
                 self._try_save_pdf(bill_html, pdf_filename)
 
                 logger.info(f"[i] Consumer: {data.get('consumer_name')}")
