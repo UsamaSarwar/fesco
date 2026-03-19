@@ -12,11 +12,11 @@ FESCO Bill Fetcher is a Python-based utility to scrape and parse electricity bil
 ## Coding Standards
 - Follow PEP 8 guidelines.
 - Use descriptive variable names.
--5. **Output Handling**: All generated files (`fesco_*.html`, `fesco_*.json`) MUST be stored in the `output/` directory.
+- **Output Handling**: All generated files (`fesco_*.html`, `fesco_*.json`) MUST be stored in the `output/` directory.
 - Maintain strict structural parsing in `_parse_bill` to avoid breakages on HTML changes.
 
 ## AI Instructions
 1. **Always verify pathing**: Use absolute paths when executing commands in this environment.
 2. **Handle Errors Gracefully**: Always include try-except blocks for network requests and file I/O.
 3. **Prefixes and Output**: Ensure all output files are prefixed with `fesco_` and saved in `output/`.
-4. **Docs**: Keep the README updated with any new features..
+4. **Docs**: Keep the README updated with any new features.
