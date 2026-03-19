@@ -26,10 +26,14 @@ class FescoFetcher:
 
     def _clean(self, text):
         """Sanitizes extracted HTML text by removing tags and extra whitespace."""
-        if not text: return ""
-        text = re.sub(r'<[^>]+>', ' ', text) # Strip HTML
-        text = re.sub(r'&\w+;', ' ', text)   # Strip HTML entities
-        text = re.sub(r'\s+', ' ', text).strip() # Squeeze whitespace
+        if not text:
+            return ""
+        text = re.sub(r'<[^>]+>', ' ', text)  # Strip HTML
+        text = re.sub(r'&\w+;', ' ', text)    # Strip HTML entities
+        # Remove common decorative separators and backticks left over from HTML formatting
+        text = re.sub(r'[`‑–—]+', ' ', text)
+        text = re.sub(r'-{2,}', ' ', text)
+        text = re.sub(r'\s+', ' ', text).strip()  # Squeeze whitespace
         return text
 
     def _get_tokens(self, html):
@@ -153,13 +157,86 @@ class FescoFetcher:
                             return self._clean(tds[i + 1])
         return ""
 
+    def _extract_numbers(self, text):
+        """Extract numeric tokens from a string (integers or decimals)."""
+        if not text:
+            return []
+        return re.findall(r'\d+(?:\.\d+)?', text)
+
+    def _parse_number(self, value):
+        """Safely parse a numeric string to float, treating empty/invalid as 0."""
+        if value is None:
+            return 0.0
+        try:
+            return float(str(value).replace(",", "").strip())
+        except Exception:
+            return 0.0
+
+    def _extract_fpa_taxes(self, html):
+        """Extract the FPA tax breakdown values from the bill HTML."""
+        match = re.search(
+            r'<b>\s*GST ON FPA\s*</b>[\s\S]*?</td>\s*<td[^>]*>([\s\S]*?)</td>',
+            html, re.IGNORECASE
+        )
+        if not match:
+            return {}
+
+        nums = self._extract_numbers(match.group(1))
+        if not nums:
+            return {}
+
+        # The FPA section typically lists each tax value and then a final total.
+        total = nums[-1]
+        tax_values = nums[:-1]
+
+        keys = [
+            "gst_on_fpa",
+            "ed_on_fpa",
+            "further_tax_on_fpa",
+            "stax_on_fpa",
+            "it_on_fpa",
+            "et_on_fpa",
+        ]
+
+        result = {}
+        for i, key in enumerate(keys):
+            result[key] = tax_values[i] if i < len(tax_values) else ""
+        result["total"] = total
+        return result
+
+    def _extract_lp_surcharge(self, html):
+        """Extract LP surcharge breakdown and due-date totals."""
+        match = re.search(r'<b>\s*L\.P\.SURCHARGE\s*</b>[\s\S]*?<td[^>]*>([\s\S]*?)</td>', html, re.IGNORECASE)
+        if not match:
+            return {}
+
+        cell = match.group(1)
+        ranges = []
+        for m in re.finditer(
+            r'(\d+(?:\.\d+)?)\s*<br\s*/?>\s*<strong>\s*(Till|After)\s*([^<]+)</strong>\s*<br\s*/?>\s*([\d\.]+)',
+            cell, re.IGNORECASE,
+        ):
+            surcharge = m.group(1).strip()
+            label = f"{m.group(2).strip()} {m.group(3).strip()}"
+            total = m.group(4).strip()
+            ranges.append({"label": label, "surcharge": surcharge, "total": total})
+
+        if not ranges:
+            return {}
+
+        return {
+            "lp_surcharge": ranges[0]["surcharge"],
+            "after_due_date": ranges[-1]["total"],
+            "after_due_date_ranges": ranges,
+        }
+
     def _parse_bill(self, html, ref_no):
         """Extracts comprehensive structured data from FESCO bill HTML using strict structural parsing."""
         data = {
             "reference_number": ref_no,
             "consumer_details": {
                 "consumer_id": "", "tariff": "", "load": "", "old_ac_number": "", "reference_full": "",
-                "lock_age": "", "no_of_acs": "", "un_bill_age": "", "name": "", "address": "", "cnic": ""
+                "lock_age": "", "no_of_acs": "", "un_bill_age": "", "name": "", "father_name": "", "address": "", "cnic": ""
             },
             "connection_details": {
                 "connection_date": "", "connected_load": "", "curr_mdi": "", "ed_at": "",
@@ -181,8 +258,8 @@ class FescoFetcher:
             "additional_info": {"bill_no": "", "deferred_amount": "", "outstanding_inst_amount": "", "progress_gst_paid_fy": "", "progress_it_paid_fy": ""}
         }
 
-        # Identify Major High-Level Blocks
-        charges_match = re.search(r'FESCO[\s\S]*?CHARGES[\s\S]*?(?=BILLING[\s\S]*?HISTORY|MONTH\s+UNITS)', html, re.IGNORECASE)
+        # Identify Major High-Level Blocks (include total charges section)
+        charges_match = re.search(r'FESCO[\s\S]*?TOTAL\s+CHARGES[\s\S]*?(?=BILL\s+CALCULATION|PAYABLE\s+WITHIN|$)', html, re.IGNORECASE)
         ch_txt = charges_match.group(0) if charges_match else html
 
         # Grids
@@ -225,14 +302,17 @@ class FescoFetcher:
             "status": meter_p[5] if len(meter_p) > 5 else ""
         })
 
-        # Name & Address (Refined for <span> structure)
+        # Name, Father Name & Address (Refined for <span> structure)
         name_p = re.search(r'NAME\s*(?:&|&amp;)\s*ADDRESS[\s\S]*?(<span>[\s\S]*?</p>)', html, re.IGNORECASE)
         if name_p:
              spans = re.findall(r'<span>([\s\S]*?)</span>', name_p.group(1), re.IGNORECASE)
              cleaned_spans = [self._clean(s) for s in spans if self._clean(s)]
              if cleaned_spans:
                   data["consumer_details"]["name"] = cleaned_spans[0]
-                  data["consumer_details"]["address"] = ", ".join(cleaned_spans[1:])
+                  if len(cleaned_spans) > 1:
+                      data["consumer_details"]["father_name"] = cleaned_spans[1]
+                  if len(cleaned_spans) > 2:
+                      data["consumer_details"]["address"] = ", ".join(cleaned_spans[2:])
 
         # CNIC
         cnic_m = re.search(r'<h4>CNIC\s*</h4>\s*</td>\s*<td[^>]*?>([\s\S]*?)</td>', html, re.IGNORECASE)
@@ -252,15 +332,41 @@ class FescoFetcher:
                  # Extract from the charges block to avoid unrelated tables (like FESCO GST No.)
                  data["charges_breakdown"][key][f_key] = self._extract_charge(label, ch_txt)
 
-        # History
-        history_match = re.search(r'MONTH\s+UNITS[\s\S]*?</table>', html, re.IGNORECASE)
-        if history_match:
-             for row in re.findall(r'<tr[^>]*>([\s\S]*?)</tr>', history_match.group(0), re.IGNORECASE):
-                  c = re.findall(r'<td[^>]*?>([\s\S]*?)</td>', row, re.IGNORECASE)
-                  if len(c) >= 4:
-                       month = self._clean(c[0])
-                       if re.match(r'^[A-Z][a-z]{2}\s*\d{2}$', month, re.IGNORECASE):
-                            data["billing_history"].append({"month": month, "units": self._clean(c[1]).split()[-1] if self._clean(c[1]) else "0", "bill": self._clean(c[2]), "payment": self._clean(c[3])})
+        # Override taxes-on-FPA values with structured parsing (FPA section uses multi-line cells)
+        data["charges_breakdown"]["taxes_on_fpa"].update(self._extract_fpa_taxes(html))
+
+        # Ensure FESCO units consumed is present (some bills leave it blank)
+        if not data["charges_breakdown"]["fesco_charges"]["units_consumed"]:
+            data["charges_breakdown"]["fesco_charges"]["units_consumed"] = data["billing_details"].get("units_consumed", "")
+
+        # Correct govt charges total if it appears incorrect (e.g., reused FESCO total cell)
+        govt = data["charges_breakdown"]["govt_charges"]
+        computed_govt_total = sum(
+            self._parse_number(govt.get(k))
+            for k in ["electricity_duty", "tv_fee", "gst", "income_tax", "extra_tax", "further_tax", "retailer_stax"]
+        )
+        if computed_govt_total:
+            existing_total = self._parse_number(govt.get("total"))
+            if existing_total == 0 or abs(existing_total - computed_govt_total) > 0.01:
+                govt["total"] = str(int(computed_govt_total) if computed_govt_total.is_integer() else round(computed_govt_total, 2))
+
+        # History (month-wise bill/payment history)
+        history_table = re.search(r'(<table[^>]*>[\s\S]*?<h4>\s*MONTH\s*</h4>[\s\S]*?</table>)', html, re.IGNORECASE)
+        if history_table:
+            for row in re.findall(r'<tr[^>]*>([\s\S]*?)</tr>', history_table.group(1), re.IGNORECASE):
+                if re.search(r'<h4>\s*MONTH\s*</h4>', row, re.IGNORECASE):
+                    continue
+                cells = re.findall(r'<td[^>]*?>([\s\S]*?)</td>', row, re.IGNORECASE)
+                if len(cells) >= 4:
+                    month = self._clean(cells[0])
+                    if re.match(r'^[A-Za-z]{3}\d{2}$', month):
+                        units = self._clean(cells[1]).split()[-1] if self._clean(cells[1]) else ""
+                        data["billing_history"].append({
+                            "month": month,
+                            "units": units,
+                            "bill": self._clean(cells[2]),
+                            "payment": self._clean(cells[3])
+                        })
 
         # Summary
         data["total_payable"].update({
@@ -268,6 +374,11 @@ class FescoFetcher:
             "after_due_date": self._extract_charge("PAYABLE AFTER DUE DATE", html),
             "lp_surcharge": self._extract_charge("L.P.SURCHARGE", html)
         })
+
+        # Derive LP-surcharge ranges and after-due totals
+        lp_details = self._extract_lp_surcharge(html)
+        if lp_details:
+            data["total_payable"].update(lp_details)
 
         return data
 
